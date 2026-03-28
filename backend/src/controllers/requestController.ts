@@ -19,8 +19,8 @@ export const getRequests = async (req: AuthRequest, res: Response): Promise<void
             params.push(user.id);
         } else if (user.role === 'manager') {
             // Manager sees requests from their department users only
-            sql += ` WHERE u.department_id = (SELECT department_id FROM users WHERE id = $1)
-               AND r.status = 'pending_manager' 
+            sql += ` WHERE (u.department_id = (SELECT department_id FROM users WHERE id = $1)
+               AND r.status = 'pending_manager')
                OR r.requester_id = $1
                ORDER BY r.created_at DESC`;
             params.push(user.id);
@@ -125,6 +125,17 @@ export const fulfillRequest = async (req: AuthRequest, res: Response): Promise<v
             `SELECT item_id, COALESCE(approved_qty, requested_qty) as qty FROM request_items WHERE request_id = $1`,
             [id]
         );
+
+        // Check stock availability before deducting
+        for (const item of reqItems) {
+            const { rows: stockRows } = await query(`SELECT quantity FROM items WHERE id = $1`, [item.item_id]);
+            if (stockRows.length === 0 || stockRows[0].quantity < item.qty) {
+                res.status(400).json({
+                    error: `Insufficient stock for item ID ${item.item_id}. Available: ${stockRows[0]?.quantity ?? 0}, Requested: ${item.qty}`
+                });
+                return;
+            }
+        }
 
         // Deduct from inventory and create transactions
         for (const item of reqItems) {
